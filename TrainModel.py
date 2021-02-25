@@ -7,20 +7,21 @@ from torch.utils.data import DataLoader
 import torch.optim as optim
 import math
 import os.path as p
-from transformers import PegasusForConditionalGeneration, PegasusTokenizer
+from transformers import PegasusForConditionalGeneration, PegasusTokenizer, BartForConditionalGeneration, BartTokenizer
+from Utils import *
 
+model_type = 'BART'
+prertained_model_name = 'facebook/bart-base'
 
-model_type = 'PEGASAS'
-prertained_model_name = 'google/pegasus-large'
-
-base = "/home/ubuntu/Keyphrase_Generation/DataForExperiments_BART/"+model_type
+base = "/home/ubuntu/CNNDM/" + model_type + "/"
 
 checkpoint_location = base + '/checkpoints/'
 
 if p.exists(checkpoint_location) == False:
     os.mkdir(checkpoint_location)
 
-def create_data_loaders(X, X_att_mask, y, y_att_mask, batch_size,data_type='train'):
+
+def create_data_loaders(X, X_att_mask, y, y_att_mask, batch_size, data_type='train'):
     X = torch.tensor(X, dtype=torch.long)
     X_att_mask = torch.tensor(X_att_mask, dtype=torch.long)
     y = torch.tensor(y, dtype=torch.long)
@@ -36,7 +37,8 @@ def create_data_loaders(X, X_att_mask, y, y_att_mask, batch_size,data_type='trai
 
     return data_loader
 
-batch_size = 8
+
+batch_size = 4
 accumulation_steps = int(256 / batch_size)
 learning_rate = 2e-5
 num_epochs = 3
@@ -44,30 +46,33 @@ model_dim = 1024
 warmup_steps = 4000
 
 report_every = 1
-validation_every = 10000
+validation_every = 500
 device = 'cuda'
-last_checkpoint_info = {}
-best_checkpoint_info = {}
 
-last_checkpoint_info['epoch'] = 0
-last_checkpoint_info['step_count'] = 0
-last_checkpoint_info['i'] = 0
-last_checkpoint_info['current_best_perplexity'] = 999999999
-
-
-last_checkpoint_info_location = checkpoint_location + 'last_checkpoint_info.pkl'
-best_checkpoint_info_location = checkpoint_location + 'best_checkpoint_info.pkl'
-last_checkpoint_location = checkpoint_location + 'last_checkpoint.pt'
-best_checkpoint_location = checkpoint_location + 'best_checkpoint.pt'
 
 def train_model(train_data_loader, validation_data_loader):
+    last_checkpoint_info = {}
 
-    if model_type == 'PEGASAS':
+    last_checkpoint_info['epoch'] = 0
+    last_checkpoint_info['step_count'] = 0
+    last_checkpoint_info['i'] = 0
+    last_checkpoint_info['current_best_perplexity'] = 999999999
+
+    last_checkpoint_info_location = checkpoint_location + 'last_checkpoint_info.pkl'
+    best_checkpoint_info_location = checkpoint_location + 'best_checkpoint_info.pkl'
+    last_checkpoint_location = checkpoint_location + 'last_checkpoint.pt'
+    best_checkpoint_location = checkpoint_location + 'best_checkpoint.pt'
+
+    if model_type == 'PEGASUS':
         model = PegasusForConditionalGeneration.from_pretrained(prertained_model_name)
         tokenizer = PegasusTokenizer.from_pretrained(prertained_model_name)
-        if p.exists(last_checkpoint_info_location) == True:
-            model.load_state_dict(torch.load(last_checkpoint_location))
-            last_checkpoint_info = load_data(last_checkpoint_info_location)
+    elif model_type == 'BART':
+        model = BartForConditionalGeneration.from_pretrained(prertained_model_name)
+        tokenizer = BartForConditionalGeneration.from_pretrained(prertained_model_name)
+    if p.exists(last_checkpoint_info_location) == True:
+        model.load_state_dict(torch.load(last_checkpoint_location))
+        last_checkpoint_info = load_data(last_checkpoint_info_location)
+
 
     if device == 'cuda':
         model.cuda()
@@ -84,12 +89,12 @@ def train_model(train_data_loader, validation_data_loader):
     for epoch in range(last_checkpoint_info['epoch'], num_epochs):
         model.train()
         step_count = 0
-        i=0
+        i = 0
         optimizer.zero_grad()
         for X, X_att_mask, y, y_att_mask in train_data_loader:
-            while step_count!=last_checkpoint_info['epoch'] or i!= last_checkpoint_info['i']:
+            while step_count != last_checkpoint_info['step_count'] or i != last_checkpoint_info['i']:
                 if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_data_loader) == 0:
-                    step_count+=1
+                    step_count += 1
                 i += 1
                 continue
             input_ids = X.to(torch.device(device))
@@ -97,11 +102,14 @@ def train_model(train_data_loader, validation_data_loader):
             y = y.to(torch.device(device))
             y_att_mask = y_att_mask.to(torch.device(device))
 
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask,
-                            decoder_attention_mask=y_att_mask, labels=y, return_dict=False)
+            decoder_input_ids = y[:, :-1].contiguous()
+            labels = y[:, 1:].contiguous()
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, decoder_input_ids=decoder_input_ids,
+                            decoder_attention_mask=y_att_mask[:, :-1].contiguous(), labels=labels, return_dict=False)
 
             crossEntropyLoss = outputs[0]
-            loss = crossEntropyLoss/accumulation_steps
+            loss = crossEntropyLoss / accumulation_steps
             loss.backward()
             if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_data_loader):
                 optimizer.step()
@@ -121,11 +129,13 @@ def train_model(train_data_loader, validation_data_loader):
                             input_ids = val_X.to(torch.device(device))
                             attention_mask = val_X_att_mask.to(torch.device(device))
                             val_y = val_y.to(torch.device(device))
+                            decoder_input_ids = val_y[:, :-1].contiguous()
+                            labels = val_y[:, 1:].contiguous()
                             val_y_att_mask = val_y_att_mask.to(torch.device(device))
 
-                            val_outputs = model(input_ids=input_ids, attention_mask=attention_mask,
-                                                decoder_attention_mask=val_y_att_mask,
-                                                labels=val_y,return_dict=False)
+                            val_outputs = model(input_ids=input_ids, attention_mask=attention_mask, decoder_input_ids = decoder_input_ids,
+                                                decoder_attention_mask=val_y_att_mask[:, :-1].contiguous(),
+                                                labels=labels, return_dict=False)
 
                             val_loss_batch = val_outputs[0]
                             validation_loss += val_loss_batch.item()
@@ -141,9 +151,9 @@ def train_model(train_data_loader, validation_data_loader):
                             prev_validation_perplexity = validation_perplexity
                             not_improving_checkpoints = 0
                             last_checkpoint_info['current_best_perplexity'] = validation_perplexity
-                            torch.save(model.state_dict(), checkpoint_location+'/last_ckeckpoint.pt')
-                            torch.save(model.state_dict(), checkpoint_location + '/best_ckeckpoint.pt')
-                            save_data(last_checkpoint_info,last_checkpoint_info_location)
+                            torch.save(model.state_dict(), last_checkpoint_location)
+                            torch.save(model.state_dict(), best_checkpoint_location)
+                            save_data(last_checkpoint_info, last_checkpoint_info_location)
                             best_checkpoint_info = last_checkpoint_info
                             save_data(best_checkpoint_info, best_checkpoint_info_location)
                         else:
@@ -157,6 +167,24 @@ def train_model(train_data_loader, validation_data_loader):
                         print("Not improving for ", patience, " checkpoints. Sopping training.")
                         train_stop_flag = True
                         break
-            i+=1
+            i += 1
         if train_stop_flag == True:
             break
+
+
+train_source = load_data(base + 'X_train_source.pkl')
+train_source_att = load_data(base + 'att_mask_train_source.pkl')
+train_summary = load_data(base + 'X_train_summary.pkl')
+train_summary_att = load_data(base + 'att_mask_train_summary.pkl')
+
+valid_source = load_data(base + 'X_valid_source.pkl')
+valid_source_att = load_data(base + 'att_mask_valid_source.pkl')
+valid_summary = load_data(base + 'X_valid_summary.pkl')
+valid_summary_att = load_data(base + 'att_mask_valid_summary.pkl')
+
+trainDataloader = create_data_loaders(train_source, train_source_att, train_summary, train_summary_att, batch_size,
+                                      data_type='train')
+validDataloader = create_data_loaders(valid_source, valid_source_att, valid_summary, valid_summary_att, batch_size,
+                                      data_type='train')
+
+train_model(trainDataloader, validDataloader)

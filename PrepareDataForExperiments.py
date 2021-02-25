@@ -3,9 +3,9 @@ import os.path as p
 import os
 import pandas
 import numpy as np
-from transformers import PegasusTokenizer
+from transformers import PegasusTokenizer, BartTokenizer
 
-base = 'F:\ResearchData\Summarization\TF_CNNDM\CSV_format\\'
+base = '/home/ubuntu/CNNDM/'
 traininingSet_location = base+'train.csv'
 test_set_location = base+'test.csv'
 validation_set_location = base + 'validation.csv'
@@ -14,10 +14,12 @@ traininingSet = pandas.read_csv(traininingSet_location)
 testingSet = pandas.read_csv(test_set_location)
 validationSet = pandas.read_csv(validation_set_location)
 
-model_type = 'PEGASUS'
-prertained_model_name = 'google/pegasus-large'
+model_type = 'BART'
+prertained_model_name = 'facebook/bart-base'
 if model_type == 'PEGASUS':
     tokenizer = PegasusTokenizer.from_pretrained(prertained_model_name, do_lower_case=True)
+elif model_type == 'BART':
+    tokenizer = BartTokenizer.from_pretrained(prertained_model_name, do_lower_case=True)
 
 def Tokenize_Input(text):
     #print(len(text))
@@ -34,8 +36,8 @@ def get_attention_masks(X,sourceOrSummary):
         #   - If a token ID is 0, then it's padding, set the mask to 0.
         #   - If a token ID is > 0, then it's a real token, set the mask to 1.
         att_mask = [int(token_id != tokenizer.pad_token_id) for token_id in sent]
-        if sourceOrSummary =='summary':
-            att_mask.insert(0, 0)#(index,value)
+        #if sourceOrSummary =='summary':
+           # att_mask.insert(0, 0)#(index,value)
         # Store the attention mask for this sentence.
         att_mask = np.asarray(att_mask)
         attention_masks.append(att_mask)
@@ -140,6 +142,6 @@ def prepare_all_data(output_location):
     print(X_valid_source.shape, att_mask_valid_source.shape)
     print(X_valid_summary.shape, att_mask_valid_summary.shape)
 
-output_location = base + 'PEGASUS\\'
+output_location = base + 'BART\\'
 
 prepare_all_data(output_location)
