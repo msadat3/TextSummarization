@@ -15,7 +15,10 @@ prertained_model_name = 'facebook/bart-base'
 
 base = "/home/ubuntu/CNNDM/" + model_type + "/"
 
-checkpoint_location = base + '/checkpoints/'
+if p.exists(base + '/second_run/') == False:
+    os.mkdir(base + '/second_run/')
+
+checkpoint_location = base + '/second_run/checkpoints/'
 
 if p.exists(checkpoint_location) == False:
     os.mkdir(checkpoint_location)
@@ -38,15 +41,16 @@ def create_data_loaders(X, X_att_mask, y, y_att_mask, batch_size, data_type='tra
     return data_loader
 
 
-batch_size = 4
+batch_size = 2
 accumulation_steps = int(256 / batch_size)
 learning_rate = 2e-5
-num_epochs = 3
+num_epochs = 4
 model_dim = 1024
 warmup_steps = 4000
 
 report_every = 1
 validation_every = 500
+checkpoint_save_every = 100
 device = 'cuda'
 
 
@@ -59,26 +63,33 @@ def train_model(train_data_loader, validation_data_loader):
     last_checkpoint_info['current_best_perplexity'] = 999999999
 
     last_checkpoint_info_location = checkpoint_location + 'last_checkpoint_info.pkl'
+    last_checkpoint_optimizer_location = checkpoint_location + 'last_checkpoint_optimizer.pt'
     best_checkpoint_info_location = checkpoint_location + 'best_checkpoint_info.pkl'
     last_checkpoint_location = checkpoint_location + 'last_checkpoint.pt'
     best_checkpoint_location = checkpoint_location + 'best_checkpoint.pt'
+    epoch_start = 0
 
     if model_type == 'PEGASUS':
         model = PegasusForConditionalGeneration.from_pretrained(prertained_model_name)
         tokenizer = PegasusTokenizer.from_pretrained(prertained_model_name)
     elif model_type == 'BART':
         model = BartForConditionalGeneration.from_pretrained(prertained_model_name)
-        tokenizer = BartForConditionalGeneration.from_pretrained(prertained_model_name)
+        tokenizer = BartTokenizer.from_pretrained(prertained_model_name)
+    lr = learning_rate
+    optimizer = optim.AdamW(params=model.parameters(), lr=lr, weight_decay=0.01, betas=(0.9, 0.98))
     if p.exists(last_checkpoint_info_location) == True:
         model.load_state_dict(torch.load(last_checkpoint_location))
         last_checkpoint_info = load_data(last_checkpoint_info_location)
-
+        # last_checkpoint_info['epoch'] = 2
+        # last_checkpoint_info['step_count'] = 390
+        # last_checkpoint_info['i'] = 49919
+        optimizer.load_state_dict(torch.load(last_checkpoint_optimizer_location))
+        print(last_checkpoint_info)
+        epoch_start = last_checkpoint_info['epoch']
 
     if device == 'cuda':
         model.cuda()
-    lr = learning_rate
 
-    optimizer = optim.AdamW(params=model.parameters(), lr=lr, weight_decay=0.01, betas=(0.9, 0.98))
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
     prev_validation_perplexity = last_checkpoint_info['current_best_perplexity']
@@ -86,17 +97,19 @@ def train_model(train_data_loader, validation_data_loader):
     not_improving_checkpoints = 0
     train_stop_flag = False
 
-    for epoch in range(last_checkpoint_info['epoch'], num_epochs):
+    for epoch in range(epoch_start, num_epochs):
         model.train()
         step_count = 0
         i = 0
         optimizer.zero_grad()
         for X, X_att_mask, y, y_att_mask in train_data_loader:
-            while step_count != last_checkpoint_info['step_count'] or i != last_checkpoint_info['i']:
-                if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_data_loader) == 0:
-                    step_count += 1
-                i += 1
-                continue
+            if p.exists(last_checkpoint_info_location) == True:
+                if step_count < last_checkpoint_info['step_count'] or i < last_checkpoint_info['i']:
+                    if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_data_loader):
+                        step_count += 1
+                    i += 1
+                    continue
+            # print('starting step', step_count, 'i', i)
             input_ids = X.to(torch.device(device))
             attention_mask = X_att_mask.to(torch.device(device))
             y = y.to(torch.device(device))
@@ -118,7 +131,16 @@ def train_model(train_data_loader, validation_data_loader):
                 print('Epoch', epoch, 'step', step_count, 'loss', loss.item(), 'current validation perplexity',
                       prev_validation_perplexity)
 
-                if step_count % validation_every == 0 or ((i + 1) == len(train_data_loader)) and step_count != 0:
+                if step_count % checkpoint_save_every == 0 and step_count != 0 and step_count % validation_every != 0 and (
+                        (i + 1) != len(train_data_loader)):
+                    last_checkpoint_info['epoch'] = epoch
+                    last_checkpoint_info['step_count'] = step_count
+                    last_checkpoint_info['i'] = i
+                    torch.save(model.state_dict(), last_checkpoint_location)
+                    torch.save(optimizer.state_dict(), last_checkpoint_optimizer_location)
+                    save_data(last_checkpoint_info, last_checkpoint_info_location)
+
+                if (step_count % validation_every == 0 or (i + 1) == len(train_data_loader)) and step_count != 0:
                     model.eval()
                     with torch.no_grad():
                         validation_loss = 0
@@ -133,17 +155,24 @@ def train_model(train_data_loader, validation_data_loader):
                             labels = val_y[:, 1:].contiguous()
                             val_y_att_mask = val_y_att_mask.to(torch.device(device))
 
-                            val_outputs = model(input_ids=input_ids, attention_mask=attention_mask, decoder_input_ids = decoder_input_ids,
+                            val_outputs = model(input_ids=input_ids, attention_mask=attention_mask,
+                                                decoder_input_ids=decoder_input_ids,
                                                 decoder_attention_mask=val_y_att_mask[:, :-1].contiguous(),
                                                 labels=labels, return_dict=False)
 
                             val_loss_batch = val_outputs[0]
                             validation_loss += val_loss_batch.item()
+                            print(validation_loss, batch_count)
                         validation_perplexity = math.exp(validation_loss / batch_count)
                         print('perp', validation_perplexity)
                         last_checkpoint_info['epoch'] = epoch
                         last_checkpoint_info['step_count'] = step_count
                         last_checkpoint_info['i'] = i
+
+                        if (i + 1) == len(train_data_loader):
+                            last_checkpoint_info['epoch'] = epoch + 1
+                            last_checkpoint_info['step_count'] = 0
+                            last_checkpoint_info['i'] = 0
 
                         if validation_perplexity < prev_validation_perplexity:
                             print("Validation perplexity improved from ", prev_validation_perplexity, " to ",
@@ -152,6 +181,7 @@ def train_model(train_data_loader, validation_data_loader):
                             not_improving_checkpoints = 0
                             last_checkpoint_info['current_best_perplexity'] = validation_perplexity
                             torch.save(model.state_dict(), last_checkpoint_location)
+                            torch.save(optimizer.state_dict(), last_checkpoint_optimizer_location)
                             torch.save(model.state_dict(), best_checkpoint_location)
                             save_data(last_checkpoint_info, last_checkpoint_info_location)
                             best_checkpoint_info = last_checkpoint_info
@@ -160,8 +190,10 @@ def train_model(train_data_loader, validation_data_loader):
                             print("Validation perplexity did not improve.")
                             not_improving_checkpoints += 1
                             torch.save(model.state_dict(), last_checkpoint_location)
+                            torch.save(optimizer.state_dict(), last_checkpoint_optimizer_location)
                             print(last_checkpoint_info)
                             save_data(last_checkpoint_info, last_checkpoint_info_location)
+
                         model.train()
                     if not_improving_checkpoints == patience:
                         print("Not improving for ", patience, " checkpoints. Sopping training.")
@@ -172,6 +204,7 @@ def train_model(train_data_loader, validation_data_loader):
             break
 
 
+print(' input start')
 train_source = load_data(base + 'X_train_source.pkl')
 train_source_att = load_data(base + 'att_mask_train_source.pkl')
 train_summary = load_data(base + 'X_train_summary.pkl')
@@ -181,10 +214,11 @@ valid_source = load_data(base + 'X_valid_source.pkl')
 valid_source_att = load_data(base + 'att_mask_valid_source.pkl')
 valid_summary = load_data(base + 'X_valid_summary.pkl')
 valid_summary_att = load_data(base + 'att_mask_valid_summary.pkl')
+print('data input done')
 
 trainDataloader = create_data_loaders(train_source, train_source_att, train_summary, train_summary_att, batch_size,
                                       data_type='train')
 validDataloader = create_data_loaders(valid_source, valid_source_att, valid_summary, valid_summary_att, batch_size,
                                       data_type='train')
-
+print('data loader done')
 train_model(trainDataloader, validDataloader)
