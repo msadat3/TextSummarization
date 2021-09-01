@@ -10,16 +10,16 @@ import os.path as p
 from transformers import PegasusForConditionalGeneration, PegasusTokenizer, BartForConditionalGeneration, BartTokenizer
 from Utils import *
 
-model_type = 'BART_large'
-print(model_type)
-prertained_model_name = 'facebook/bart-large'
+model_type = 'BART'
+prertained_model_name = 'facebook/bart-base'
+activation_type = 'sparsemax'
 
-base = "/home/ubuntu/CNNDM_v2/" + model_type + "/"
+base = "/home/ubuntu/CNNDM/" + model_type + "/"
 
-if p.exists(base + '/first_run/') == False:
-    os.mkdir(base + '/first_run/')
+if p.exists(base + '/sparsemax/') == False:
+    os.mkdir(base + '/sparsemax/')
 
-checkpoint_location = base + '/first_run/checkpoints/'
+checkpoint_location = base + '/sparsemax/checkpoints/'
 
 if p.exists(checkpoint_location) == False:
     os.mkdir(checkpoint_location)
@@ -31,7 +31,6 @@ def create_data_loaders(X, X_att_mask, y, y_att_mask, batch_size, data_type='tra
     y = torch.tensor(y, dtype=torch.long)
     y_att_mask = torch.tensor(y_att_mask, dtype=torch.long)
 
-    print(X.shape, y.shape)
     data = TensorDataset(X, X_att_mask, y, y_att_mask)
     if data_type != 'train':
         # data = sorted(data, key=lambda x: x[3], reverse=True)#sorting by target length in descending order
@@ -44,9 +43,9 @@ def create_data_loaders(X, X_att_mask, y, y_att_mask, batch_size, data_type='tra
 
 
 batch_size = 2
-accumulation_steps = int(256 / batch_size)
+accumulation_steps = int(16 / batch_size)
 learning_rate = 2e-5
-num_epochs = 10
+num_epochs = 6
 model_dim = 1024
 warmup_steps = 4000
 
@@ -63,7 +62,6 @@ def train_model(train_data_loader, validation_data_loader):
     last_checkpoint_info['step_count'] = 0
     last_checkpoint_info['i'] = 0
     last_checkpoint_info['current_best_perplexity'] = 999999999
-    last_checkpoint_info['not_improving_checkpoints'] = 0
 
     last_checkpoint_info_location = checkpoint_location + 'last_checkpoint_info.pkl'
     last_checkpoint_optimizer_location = checkpoint_location + 'last_checkpoint_optimizer.pt'
@@ -73,10 +71,10 @@ def train_model(train_data_loader, validation_data_loader):
     epoch_start = 0
 
     if model_type == 'PEGASUS':
-        model = PegasusForConditionalGeneration.from_pretrained(prertained_model_name)
+        model = PegasusForConditionalGeneration.from_pretrained(prertained_model_name,attention_activation = attention_activation)
         tokenizer = PegasusTokenizer.from_pretrained(prertained_model_name)
-    elif model_type == 'BART' or model_type == 'BART_large':
-        model = BartForConditionalGeneration.from_pretrained(prertained_model_name)
+    elif model_type == 'BART':
+        model = BartForConditionalGeneration.from_pretrained(prertained_model_name,attention_activation = attention_activation)
         tokenizer = BartTokenizer.from_pretrained(prertained_model_name)
     lr = learning_rate
     if device == 'cuda':
@@ -92,12 +90,11 @@ def train_model(train_data_loader, validation_data_loader):
         print(last_checkpoint_info)
         epoch_start = last_checkpoint_info['epoch']
 
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    #criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
     prev_validation_perplexity = last_checkpoint_info['current_best_perplexity']
     patience = 5
-    # not_improving_checkpoints = last_checkpoint_info['not_improving_checkpoints']
-    not_improving_checkpoints = last_checkpoint_info['not_improving_checkpoints']
+    not_improving_checkpoints = 1
     train_stop_flag = False
 
     for epoch in range(epoch_start, num_epochs):
@@ -182,7 +179,6 @@ def train_model(train_data_loader, validation_data_loader):
                                   validation_perplexity)
                             prev_validation_perplexity = validation_perplexity
                             not_improving_checkpoints = 0
-                            last_checkpoint_info['not_improving_checkpoints'] = not_improving_checkpoints
                             last_checkpoint_info['current_best_perplexity'] = validation_perplexity
                             torch.save(model.state_dict(), last_checkpoint_location)
                             torch.save(optimizer.state_dict(), last_checkpoint_optimizer_location)
@@ -193,7 +189,6 @@ def train_model(train_data_loader, validation_data_loader):
                         else:
                             print("Validation perplexity did not improve.")
                             not_improving_checkpoints += 1
-                            last_checkpoint_info['not_improving_checkpoints'] = not_improving_checkpoints
                             torch.save(model.state_dict(), last_checkpoint_location)
                             torch.save(optimizer.state_dict(), last_checkpoint_optimizer_location)
                             print(last_checkpoint_info)
@@ -209,11 +204,11 @@ def train_model(train_data_loader, validation_data_loader):
             break
 
 
-print('sof input start')
-# base = "/home/ubuntu/CNNDM_v2/" + model_type + "/"
-if p.exists(base + "/trainDataloader") == True:
+print(' input start')
+
+if p.exists("/home/ubuntu/CNNDM/" + model_type + "/trainDataloader") == True:
     print('loading saved trainloader')
-    trainDataloader = torch.load(base + "/trainDataloader")
+    trainDataloader = torch.load("/home/ubuntu/CNNDM/" + model_type + "/trainDataloader")
 else:
     print('creating trainloader')
     train_source = load_data(base + 'X_train_source.pkl')
@@ -222,11 +217,11 @@ else:
     train_summary_att = load_data(base + 'att_mask_train_summary.pkl')
     trainDataloader = create_data_loaders(train_source, train_source_att, train_summary, train_summary_att, batch_size,
                                           data_type='train')
-    torch.save(trainDataloader, base + "/trainDataloader")
+    torch.save(trainDataloader, "/home/ubuntu/CNNDM/" + model_type + "/trainDataloader")
 
-if p.exists(base + "/validDataloader") == True:
+if p.exists("/home/ubuntu/CNNDM/" + model_type + "/validDataloader") == True:
     print('loading saved validationloader')
-    validDataloader = torch.load(base+"/validDataloader")
+    validDataloader = torch.load("/home/ubuntu/CNNDM/" + model_type + "/validDataloader")
 else:
     print('creating validationloader')
     valid_source = load_data(base + 'X_valid_source.pkl')
@@ -235,7 +230,7 @@ else:
     valid_summary_att = load_data(base + 'att_mask_valid_summary.pkl')
     validDataloader = create_data_loaders(valid_source, valid_source_att, valid_summary, valid_summary_att, batch_size,
                                           data_type='valid')
-    torch.save(validDataloader, base + "/validDataloader")
+    torch.save(validDataloader, "/home/ubuntu/CNNDM/" + model_type + "/validDataloader")
 
 print('data input done')
 

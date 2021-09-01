@@ -3,14 +3,17 @@ import os
 import os.path as p
 import pyrouge
 from Utils import *
+import nltk
 
-model_type = "BART"
+model_type = "BART_large"
 base = "/home/ubuntu/CNNDM/" + model_type + "/"
-ref_list_location = base + "/test_only_summary_list.pkl"
-generated_list_location = base+model_type+"/generated_summaries_list.pkl"
+ref_list_location = "/home/ubuntu/CNNDM/test_only_summary_list.pkl"
+beam_size = 5
+epoch_number = "trained_checkpoint"
+generated_list_location = base + '/first_run/generated_summaries_cased_beam_'+str(beam_size)+ '_epoch_'+str(epoch_number)+'.pkl'
 
-ref_dir = base + 'references/'
-generated_dir = base + 'generated/'
+ref_dir = base + '/first_run/references/'
+generated_dir = base + '/first_run/generated_beam_'+str(beam_size)+ '_epoch_'+str(epoch_number)+'/'
 
 if p.exists(ref_dir) == False:
     os.mkdir(ref_dir)
@@ -31,7 +34,10 @@ def write_for_rouge(reference_sents, generated_summary, ex_index):
       ex_index: int, the index with which to label the files
     """
     # First, divide decoded output into sentences
-    decoded_words = generated_summary.split(' ')
+    #generated_summary = generated_summary.replace(" .",". ")
+    decoded_words = nltk.tokenize.word_tokenize(generated_summary)
+    #print(generated_summary)
+    #print(decoded_words)
     decoded_sents = []
     while len(decoded_words) > 0:
         try:
@@ -41,7 +47,7 @@ def write_for_rouge(reference_sents, generated_summary, ex_index):
         sent = decoded_words[:fst_period_idx + 1]  # sentence up to and including the period
         decoded_words = decoded_words[fst_period_idx + 1:]  # everything else
         decoded_sents.append(' '.join(sent))
-
+    #print(len(decoded_sents))
     # pyrouge calls a perl script that puts the data into HTML files.
     # Therefore we need to make our output HTML safe.
     decoded_sents = [make_html_safe(w) for w in decoded_sents]
@@ -86,7 +92,7 @@ def rouge_log(results_dict, dir_to_write):
       val_cb = results_dict[key_cb]
       val_ce = results_dict[key_ce]
       log_str += "%s: %.4f with confidence interval (%.4f, %.4f)\n" % (key, val, val_cb, val_ce)
-  results_file = os.path.join(dir_to_write, "ROUGE_results.txt")
+  results_file = os.path.join(dir_to_write, 'ROUGE_results_beam_'+str(beam_size)+ '_epoch_'+str(epoch_number)+'.txt')
   with open(results_file, "w") as f:
     f.write(log_str)
 
@@ -100,4 +106,4 @@ for ref_summary, gen_summary in zip(ref_list,gen_list):
 
 rouge_result_dict = rouge_eval(ref_dir,generated_dir)
 
-rouge_log(rouge_result_dict, base)
+rouge_log(rouge_result_dict, base+'/first_run/')

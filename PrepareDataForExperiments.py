@@ -5,7 +5,7 @@ import pandas
 import numpy as np
 from transformers import PegasusTokenizer, BartTokenizer
 
-base = '/home/ubuntu/CNNDM/'
+base = '/home/ubuntu/CNNDM_v2/'
 traininingSet_location = base+'train.csv'
 test_set_location = base+'test.csv'
 validation_set_location = base + 'validation.csv'
@@ -15,16 +15,16 @@ testingSet = pandas.read_csv(test_set_location)
 validationSet = pandas.read_csv(validation_set_location)
 
 model_type = 'BART'
-prertained_model_name = 'facebook/bart-base'
+prertained_model_name = 'facebook/bart-large'
 if model_type == 'PEGASUS':
-    tokenizer = PegasusTokenizer.from_pretrained(prertained_model_name, do_lower_case=True)
+    tokenizer = PegasusTokenizer.from_pretrained(prertained_model_name, do_lower_case=False)
 elif model_type == 'BART':
-    tokenizer = BartTokenizer.from_pretrained(prertained_model_name, do_lower_case=True)
+    tokenizer = BartTokenizer.from_pretrained(prertained_model_name, do_lower_case=False)
 
-def Tokenize_Input(text):
+def Tokenize_Input(text, max_length = 1024):
     #print(len(text))
     #first_encoded = tokenizer.encode(first_sentence,add_special_tokens=False)
-    text_encoded = tokenizer.encode(text, truncation=True, padding=True, add_special_tokens=True)
+    text_encoded = tokenizer.encode(text, truncation=True, padding=True, add_special_tokens=True, max_length= max_length)
     return text_encoded
 
 def get_attention_masks(X,sourceOrSummary):
@@ -53,18 +53,18 @@ def pad_seq(seq,max_len,pad_idx):
         seq.append(pad_idx)
     return seq
 
-def prepare_all_data(output_location):
+def prepare_all_data(output_location, source_max_length, summary_max_length):
     if p.exists(output_location) == False:
         os.mkdir(output_location)
 
-    X_train_source = traininingSet.apply(lambda x: Tokenize_Input(x['source']), axis=1)
-    X_train_summary = traininingSet.apply(lambda x: Tokenize_Input(x['summary']), axis=1)
+    X_train_source = traininingSet.apply(lambda x: Tokenize_Input(x['source'], max_length = source_max_length), axis=1)
+    X_train_summary = traininingSet.apply(lambda x: Tokenize_Input(x['summary'], max_length = summary_max_length), axis=1)
 
-    X_test_source = testingSet.apply(lambda x: Tokenize_Input(x['source']), axis=1)
-    X_test_summary = testingSet.apply(lambda x: Tokenize_Input(x['summary']), axis=1)
+    X_test_source = testingSet.apply(lambda x: Tokenize_Input(x['source'], max_length = source_max_length), axis=1)
+    X_test_summary = testingSet.apply(lambda x: Tokenize_Input(x['summary'], max_length = summary_max_length), axis=1)
 
-    X_valid_source = validationSet.apply(lambda x: Tokenize_Input(x['source']), axis=1)
-    X_valid_summary = validationSet.apply(lambda x: Tokenize_Input(x['summary']), axis=1)
+    X_valid_source = validationSet.apply(lambda x: Tokenize_Input(x['source'], max_length = source_max_length), axis=1)
+    X_valid_summary = validationSet.apply(lambda x: Tokenize_Input(x['summary'], max_length = summary_max_length), axis=1)
 
     X_train_source = pandas.Series(X_train_source)
     X_train_summary = pandas.Series(X_train_summary)
@@ -142,6 +142,7 @@ def prepare_all_data(output_location):
     print(X_valid_source.shape, att_mask_valid_source.shape)
     print(X_valid_summary.shape, att_mask_valid_summary.shape)
 
-output_location = base + 'BART\\'
+print(prertained_model_name, 'cased')
+output_location = base + 'BART_large/'
 
-prepare_all_data(output_location)
+prepare_all_data(output_location, 1024,140)
